@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const RegisterModel = require('./Models/RegisterModel');
+const BeneficiaryModel = require('./Models/BeneficiaryModel');
 
 const app = express();
 app.use(cors());
@@ -121,6 +122,103 @@ app.get('/getRegisterDetails/:userName', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Add beneficiary API
+app.post('/addBeneficiary', async (req, res) => {
+  try {
+    const {
+      beneficiaryName,
+      accountUserName,
+      beneficiaryNickName,
+      beneficiaryType,
+      accountNumber,
+      ifsc
+    } = req.body;
+
+    // Required field validation
+    if (!beneficiaryName || !accountUserName || !beneficiaryType || !accountNumber || !ifsc) {
+      return res.status(400).json({
+        message: 'beneficiaryName, accountUserName, beneficiaryType, accountNumber and ifsc are required'
+      });
+    }
+
+    // Check duplicate account number
+    const existingBeneficiary = await BeneficiaryModel.findOne({ accountNumber });
+
+    if (existingBeneficiary) {
+      return res.status(409).json({
+        exists: true,
+        message: 'Account number already exists'
+      });
+    }
+
+    // Create beneficiary
+    const newBeneficiary = new BeneficiaryModel({
+      beneficiaryName,
+      accountUserName,
+      beneficiaryNickName,
+      beneficiaryType,
+      accountNumber,
+      ifsc
+    });
+
+    await newBeneficiary.save();
+
+    return res.status(201).json({
+      exists: false,
+      message: 'Beneficiary added successfully',
+      beneficiary: {
+        beneficiaryName: newBeneficiary.beneficiaryName,
+        accountUserName: newBeneficiary.accountUserName,
+        beneficiaryNickName: newBeneficiary.beneficiaryNickName,
+        beneficiaryType: newBeneficiary.beneficiaryType,
+        accountNumber: newBeneficiary.accountNumber,
+        ifsc: newBeneficiary.ifsc
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    // Mongo duplicate key error fallback
+    if (error.code === 11000) {
+      return res.status(409).json({
+        exists: true,
+        message: 'Account number already exists'
+      });
+    }
+
+    return res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+// Get beneficiary details by account UserName
+app.get('/getBeneficiaries/:accountUserName', async (req, res) => {
+  try {
+    const { accountUserName } = req.params;
+
+    const beneficiaries = await BeneficiaryModel.find({ accountUserName });
+
+    if (beneficiaries.length === 0) {
+      return res.status(404).json({
+        message: 'No beneficiaries found for this user'
+      });
+    }
+
+    return res.status(200).json({
+      count: beneficiaries.length,
+      beneficiaries
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: 'Server error'
+    });
   }
 });
 
