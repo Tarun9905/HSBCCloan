@@ -3,6 +3,8 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const RegisterModel = require('./Models/RegisterModel');
 const BeneficiaryModel = require('./Models/BeneficiaryModel');
+const AmountDepositModel = require('./Models/AmountDeposit');
+const TransactionModel = require('./Models/TransactionModel');
 
 const app = express();
 app.use(cors());
@@ -21,10 +23,10 @@ app.listen(PORT, () => {
 //Register API
 app.post('/userRegister', async (req, res) => {
   try {
-    const { userName, accountType, password, accountNo } = req.body;
+    const { userName, accountType, password, accountNo, ifsc } = req.body;
 
     // 1. Validate
-    if (!userName || !accountType || !password || !accountNo) {
+    if (!userName || !accountType || !password || !accountNo || !ifsc) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
@@ -40,39 +42,63 @@ app.post('/userRegister', async (req, res) => {
       return res.status(409).json({ message: 'Account number already exists' });
     }
 
-    // 4. Create user
+    // 4. Find pending transactions for this account number
+    const pendingTransactions = await TransactionModel.find({
+      toAccountNumber: accountNo,
+      status: 'pending'
+    });
+
+    // 5. Calculate pending total amount
+    const pendingAmount = pendingTransactions.reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+    // 6. Create user with pending amount added to balance
     const newUser = new RegisterModel({
       userName,
       accountType,
       password, // later hash with bcrypt
-      accountNo
+      accountNo,
+      ifsc,
+      amount: pendingAmount
     });
 
     await newUser.save();
 
-    res.status(201).json({
-      message: 'User registered successfully',
+    // 7. Mark pending transactions as completed
+    if (pendingTransactions.length > 0) {
+      await TransactionModel.updateMany(
+        { toAccountNumber: accountNo, status: 'pending' },
+        { $set: { status: 'completed' } }
+      );
+    }
+
+    return res.status(201).json({
+      message:
+        pendingTransactions.length > 0
+          ? 'User registered successfully and pending transactions were credited'
+          : 'User registered successfully',
       user: {
-        userName,
-        accountType,
-        accountNo
-      }
+        userName: newUser.userName,
+        accountType: newUser.accountType,
+        accountNo: newUser.accountNo,
+        ifsc: newUser.ifsc,
+        amount: newUser.amount
+      },
+      completedPendingTransactions: pendingTransactions.length
     });
 
   } catch (error) {
     console.error(error);
 
-    // Handle duplicate key error from MongoDB also
     if (error.code === 11000) {
-      if (error.keyPattern.userName) {
+      if (error.keyPattern?.userName) {
         return res.status(409).json({ message: 'Username already exists' });
       }
-      if (error.keyPattern.accountNo) {
+      if (error.keyPattern?.accountNo) {
         return res.status(409).json({ message: 'Account number already exists' });
       }
     }
 
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -91,9 +117,19 @@ app.post('/userLogin', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    // move current logonDate to lastLoginDate
+    user.lastLoginDate = user.logonDate;
+
+    // set new login time as current logonDate
+    user.logonDate = new Date();
+
+    await user.save();
+
     return res.status(200).json({
       userName: user.userName,
-      login: false
+      login: false,
+      logonDate: user.logonDate,
+      lastLoginDate: user.lastLoginDate
     });
 
   } catch (error) {
@@ -107,17 +143,13 @@ app.get('/getRegisterDetails/:userName', async (req, res) => {
   try {
     const { userName } = req.params;
 
-    const user = await RegisterModel.findOne({ userName });
+    const user = await RegisterModel.findOne({ userName }).select('-password');
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.status(200).json({
-      userName: user.userName,
-      accountType: user.accountType,
-      accountNo: user.accountNo
-    });
+    res.status(200).json(user);
 
   } catch (error) {
     console.error(error);
@@ -213,6 +245,211 @@ app.get('/getBeneficiaries/:accountUserName', async (req, res) => {
       count: beneficiaries.length,
       beneficiaries
     });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+// Deposit Amount API
+app.post('/depositAmount', async (req, res) => {
+  try {
+    const { accountUserName, accountNumber, amount } = req.body;
+
+    if (!accountUserName || !accountNumber || amount == null) {
+      return res.status(400).json({
+        message: 'accountUserName, accountNumber and amount are required'
+      });
+    }
+
+    const depositAmount = Number(amount);
+
+    if (isNaN(depositAmount) || depositAmount <= 0) {
+      return res.status(400).json({
+        message: 'Amount must be greater than 0'
+      });
+    }
+
+    // Find account in RegisterModel
+    const user = await RegisterModel.findOne({
+      userName: accountUserName,
+      accountNo: accountNumber
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'Account not found'
+      });
+    }
+
+    // Update balance
+    user.amount += depositAmount;
+    await user.save();
+
+    return res.status(200).json({
+      message: 'Amount deposited successfully',
+      userName: user.userName,
+      accountNo: user.accountNo,
+      updatedBalance: user.amount
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+// get deposit details by account Number
+app.get('/getDeposits/:accountNumber', async (req, res) => {
+  try {
+    const { accountNumber } = req.params;
+
+    const deposits = await AmountDepositModel.find({ accountNumber }).sort({ date: -1 });
+
+    return res.status(200).json({
+      count: deposits.length,
+      deposits
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+// transaction API
+app.post('/createTransaction', async (req, res) => {
+  try {
+    const {
+      fromAccountUserName,
+      fromAccountNumber,
+      toAccountUserName,
+      toAccountNumber,
+      amount,
+      transferType,
+      rtgsTransferType,
+      referance,
+      recurring
+    } = req.body;
+
+    if (
+      !fromAccountUserName ||
+      !fromAccountNumber ||
+      !toAccountNumber ||
+      amount == null ||
+      !transferType
+    ) {
+      return res.status(400).json({
+        message: 'fromAccountUserName, fromAccountNumber, toAccountNumber, amount and transferType are required'
+      });
+    }
+
+    const transferAmount = Number(amount);
+
+    if (isNaN(transferAmount) || transferAmount <= 0) {
+      return res.status(400).json({
+        message: 'Amount must be greater than 0'
+      });
+    }
+
+    // Find sender
+    const fromUser = await RegisterModel.findOne({
+      userName: fromAccountUserName,
+      accountNo: fromAccountNumber
+    });
+
+    if (!fromUser) {
+      return res.status(404).json({
+        message: 'From account not found'
+      });
+    }
+
+    // Check sender balance
+    if (fromUser.amount < transferAmount) {
+      return res.status(400).json({
+        message: 'Insufficient balance'
+      });
+    }
+
+    // Find receiver ONLY by account number
+    const toUser = await RegisterModel.findOne({
+      accountNo: toAccountNumber
+    });
+
+    let transactionStatus = 'pending';
+
+    // Deduct from sender
+    fromUser.amount -= transferAmount;
+    await fromUser.save();
+
+    // If receiver exists, credit receiver and mark completed
+    if (toUser) {
+      toUser.amount += transferAmount;
+      await toUser.save();
+      transactionStatus = 'completed';
+    }
+
+    // Save transaction
+    const newTransaction = new TransactionModel({
+      fromAccountUserName,
+      fromAccountNumber,
+      toAccountUserName,
+      toAccountNumber,
+      amount: transferAmount,
+      transferType,
+      rtgsTransferType,
+      referance,
+      recurring,
+      date: new Date(),
+      status: transactionStatus
+    });
+
+    await newTransaction.save();
+
+    return res.status(201).json({
+      message:
+        transactionStatus === 'completed'
+          ? 'Transaction completed successfully'
+          : 'Transaction created successfully, receiver not found so marked as pending',
+      transaction: newTransaction,
+      fromAccountUpdatedBalance: fromUser.amount,
+      toAccountUpdatedBalance: toUser ? toUser.amount : null
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+//according to account number get transaction details
+app.get('/getTransactions/:accountNumber', async (req, res) => {
+  try {
+    const { accountNumber } = req.params;
+
+    const transactions = await TransactionModel.find({
+      $or: [
+        { fromAccountNumber: accountNumber },
+        { toAccountNumber: accountNumber }
+      ]
+    }).sort({ date: -1 });
+
+    if (!transactions.length) {
+      return res.status(404).json({
+        message: 'No transactions found for this account number'
+      });
+    }
+
+    return res.status(200).json(transactions);
 
   } catch (error) {
     console.error(error);

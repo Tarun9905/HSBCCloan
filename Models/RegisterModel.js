@@ -5,6 +5,10 @@ const RegisterSchema = mongoose.Schema({
     accountType:{ type: String, required: true},
     password:{ type: String, required: true },
     accountNo:{ type: String, required: true, unique: true },
+    ifsc: { type: String, required: true },
+    logonDate: { type: Date, default: Date.now },
+    lastLoginDate: { type: Date},
+    amount: { type: Number, default: 0 }
 })
 
 const RegisterModel = mongoose.model('Registration',RegisterSchema)
