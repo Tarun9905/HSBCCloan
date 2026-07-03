@@ -316,6 +316,112 @@ app.get('/getDeposits/:accountNumber', async (req, res) => {
 });
 
 // transaction API
+// app.post('/createTransaction', async (req, res) => {
+//   try {
+//     const {
+//       fromAccountUserName,
+//       fromAccountNumber,
+//       toAccountUserName,
+//       toAccountNumber,
+//       amount,
+//       transferType,
+//       rtgsTransferType,
+//       referance,
+//       recurring
+//     } = req.body;
+
+//     if (
+//       !fromAccountUserName ||
+//       !fromAccountNumber ||
+//       !toAccountNumber ||
+//       amount == null ||
+//       !transferType
+//     ) {
+//       return res.status(400).json({
+//         message: 'fromAccountUserName, fromAccountNumber, toAccountNumber, amount and transferType are required'
+//       });
+//     }
+
+//     const transferAmount = Number(amount);
+
+//     if (isNaN(transferAmount) || transferAmount <= 0) {
+//       return res.status(400).json({
+//         message: 'Amount must be greater than 0'
+//       });
+//     }
+
+//     // Find sender
+//     const fromUser = await RegisterModel.findOne({
+//       userName: fromAccountUserName,
+//       accountNo: fromAccountNumber
+//     });
+
+//     if (!fromUser) {
+//       return res.status(404).json({
+//         message: 'From account not found'
+//       });
+//     }
+
+//     // Check sender balance
+//     if (fromUser.amount < transferAmount) {
+//       return res.status(400).json({
+//         message: 'Insufficient balance'
+//       });
+//     }
+
+//     // Find receiver ONLY by account number
+//     const toUser = await RegisterModel.findOne({
+//       accountNo: toAccountNumber
+//     });
+
+//     let transactionStatus = 'pending';
+
+//     // Deduct from sender
+//     fromUser.amount -= transferAmount;
+//     await fromUser.save();
+
+//     // If receiver exists, credit receiver and mark completed
+//     if (toUser) {
+//       toUser.amount += transferAmount;
+//       await toUser.save();
+//       transactionStatus = 'completed';
+//     }
+
+//     // Save transaction
+//     const newTransaction = new TransactionModel({
+//       fromAccountUserName,
+//       fromAccountNumber,
+//       toAccountUserName,
+//       toAccountNumber,
+//       amount: transferAmount,
+//       transferType,
+//       rtgsTransferType,
+//       referance,
+//       recurring,
+//       date: new Date(),
+//       status: transactionStatus
+//     });
+
+//     await newTransaction.save();
+
+//     return res.status(201).json({
+//       message:
+//         transactionStatus === 'completed'
+//           ? 'Transaction completed successfully'
+//           : 'Transaction created successfully, receiver not found so marked as pending',
+//       transaction: newTransaction,
+//       fromAccountUpdatedBalance: fromUser.amount,
+//       toAccountUpdatedBalance: toUser ? toUser.amount : null
+//     });
+
+//   } catch (error) {
+//     console.error(error);
+//     return res.status(500).json({
+//       message: 'Server error'
+//     });
+//   }
+// });
+
 app.post('/createTransaction', async (req, res) => {
   try {
     const {
@@ -338,7 +444,8 @@ app.post('/createTransaction', async (req, res) => {
       !transferType
     ) {
       return res.status(400).json({
-        message: 'fromAccountUserName, fromAccountNumber, toAccountNumber, amount and transferType are required'
+        message:
+          'fromAccountUserName, fromAccountNumber, toAccountNumber, amount and transferType are required'
       });
     }
 
@@ -352,42 +459,46 @@ app.post('/createTransaction', async (req, res) => {
 
     // Find sender
     const fromUser = await RegisterModel.findOne({
-      userName: fromAccountUserName,
       accountNo: fromAccountNumber
     });
 
-    if (!fromUser) {
-      return res.status(404).json({
-        message: 'From account not found'
-      });
-    }
-
-    // Check sender balance
-    if (fromUser.amount < transferAmount) {
-      return res.status(400).json({
-        message: 'Insufficient balance'
-      });
-    }
-
-    // Find receiver ONLY by account number
+    // Find receiver
     const toUser = await RegisterModel.findOne({
       accountNo: toAccountNumber
     });
 
     let transactionStatus = 'pending';
+    let fromAccountUpdatedBalance = null;
+    let toAccountUpdatedBalance = null;
 
-    // Deduct from sender
-    fromUser.amount -= transferAmount;
-    await fromUser.save();
+    // =========================
+    // 1. Deduct ONLY if sender exists
+    // =========================
+    if (fromUser) {
+      if (fromUser.amount < transferAmount) {
+        return res.status(400).json({
+          message: 'Insufficient balance'
+        });
+      }
 
-    // If receiver exists, credit receiver and mark completed
+      fromUser.amount -= transferAmount;
+      await fromUser.save();
+      fromAccountUpdatedBalance = fromUser.amount;
+    }
+
+    // =========================
+    // 2. Credit ONLY if receiver exists
+    // =========================
     if (toUser) {
       toUser.amount += transferAmount;
       await toUser.save();
+      toAccountUpdatedBalance = toUser.amount;
       transactionStatus = 'completed';
     }
 
-    // Save transaction
+    // =========================
+    // 3. Save transaction always
+    // =========================
     const newTransaction = new TransactionModel({
       fromAccountUserName,
       fromAccountNumber,
@@ -405,13 +516,12 @@ app.post('/createTransaction', async (req, res) => {
     await newTransaction.save();
 
     return res.status(201).json({
-      message:
-        transactionStatus === 'completed'
-          ? 'Transaction completed successfully'
-          : 'Transaction created successfully, receiver not found so marked as pending',
+      message: 'Transaction created successfully',
       transaction: newTransaction,
-      fromAccountUpdatedBalance: fromUser.amount,
-      toAccountUpdatedBalance: toUser ? toUser.amount : null
+      fromAccountFound: !!fromUser,
+      toAccountFound: !!toUser,
+      fromAccountUpdatedBalance,
+      toAccountUpdatedBalance
     });
 
   } catch (error) {
