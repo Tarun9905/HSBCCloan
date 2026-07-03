@@ -5,7 +5,7 @@ const BeneficiarySchema = new mongoose.Schema({
   accountUserName:{ type: String, required: true },
   beneficiaryNickName: {type: String},
   beneficiaryType: {type: String,required: true},
-  accountNumber: {type: String,required: true,unique: true},
+  accountNumber: {type: String,required: true},
   ifsc: {type: String,required: true}
 });
 

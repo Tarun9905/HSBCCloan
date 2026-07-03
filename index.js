@@ -176,15 +176,6 @@ app.post('/addBeneficiary', async (req, res) => {
       });
     }
 
-    // Check duplicate account number
-    const existingBeneficiary = await BeneficiaryModel.findOne({ accountNumber });
-
-    if (existingBeneficiary) {
-      return res.status(409).json({
-        exists: true,
-        message: 'Account number already exists'
-      });
-    }
 
     // Create beneficiary
     const newBeneficiary = new BeneficiaryModel({
